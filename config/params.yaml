@@ -1,0 +1,18 @@
+global_flight_node:
+  ros__parameters:
+    pid_yaw:
+      kp: 0.05
+      ki: 0.001
+      kd: 0.01
+    pid_forward:
+      kp: 0.8
+      ki: 0.01
+      kd: 0.1
+    desired_distance: 5.0
+    max_forward_speed: 2.0
+    waypoints: [
+      49.22761148, 16.57039144, 10.0,
+      49.22786851, 16.57119060, 10.0,
+      49.22702478, 16.57182034, 10.0,
+      49.22676566, 16.57102436, 10.0
+    ]

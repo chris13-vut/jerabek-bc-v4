@@ -2,68 +2,66 @@
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Point
+from ultralytics import YOLO
+import math
+import os
 import cv2
-import numpy as np
 
-class MouseCameraNode(Node):
+class YoloRosNode(Node):
     def __init__(self):
-        super().__init__('mouse_camera_node')
-        self.pub = self.create_publisher(Point, '/camera/target', 10)
-        
-        # Nastavení okna
-        self.width = 640
-        self.height = 480
-        self.mouse_x = self.width // 2
-        self.mouse_y = self.height // 2
-        self.detected = False
+        super().__init__('yolo_tracker_node')
+        self.publisher_ = self.create_publisher(Point, '/camera/target', 10)
+        self.H = 1.7          
+        self.PITCH_RAD = math.radians(15)   
+        self.FOV_V_RAD = math.radians(55)   
+        self.model_path = "/home/chris/Downloads/yolo11m-visdrone.pt"
+        self.image_path = "/home/chris/estimate_yolo/test.JPG"
+        self.output_path = "/home/chris/estimate_yolo/vzdalenost_test.JPG"
+        if not os.path.exists(self.model_path): return
+        self.model = YOLO(self.model_path)
+        self.timer = self.create_timer(0.5, self.timer_callback)
 
-        cv2.namedWindow("Kamera Simulator (Ovladani mysi)")
-        cv2.setMouseCallback("Kamera Simulator (Ovladani mysi)", self.mouse_event)
-        
-        self.timer = self.create_timer(0.1, self.publish_position)
-        self.get_logger().info("Simulator spusten. Hybej mysi v okne pro simulaci cloveka.")
+    def calculate_distance_and_angle(self, x1, y1, x2, y2, img_width, img_height):
+        h_px = y2 - y1
+        x_center, y_center = (x1 + x2) / 2, (y1 + y2) / 2
+        f_px = img_height / (2 * math.tan(self.FOV_V_RAD / 2))
+        local_pitch = self.PITCH_RAD + math.atan((y_center - (img_height / 2)) / f_px)
+        distance = (self.H * (math.cos(local_pitch)**2) * f_px) / h_px
+        yaw_angle = math.atan((x_center - (img_width / 2)) / f_px)
+        return distance, yaw_angle
 
-    def mouse_event(self, event, x, y, flags, param):
-        self.mouse_x = x
-        self.mouse_y = y
-        # Simulujeme detekci jen když je myš v okně (nebo můžeme přidat kliknutí)
-        self.detected = True
+    def timer_callback(self):
+        if not os.path.exists(self.image_path):
+            self.publish_target(0.0, 0.0, False)
+            return
+        results = self.model(self.image_path, device='cpu', verbose=False)
+        r = results[0]
+        img_height, img_width = r.orig_shape
+        best_det, best_score = None, 0.0
+        for det in r.boxes.data.tolist():
+            x1, y1, x2, y2, score, class_id = det
+            if int(class_id) in [0, 1] and score > best_score:
+                best_score, best_det = score, det
+        if best_det:
+            x1, y1, x2, y2, score, class_id = best_det
+            dist, ang = self.calculate_distance_and_angle(x1, y1, x2, y2, img_width, img_height)
+            self.publish_target(ang, dist, True)
+        else:
+            self.publish_target(0.0, 0.0, False)
 
-    def publish_position(self):
-        # Přepočet X souřadnice na úhel (např. -30 až +30 stupňů)
-        # Střed (320) = 0 stupňů
-        relative_x = (self.mouse_x - (self.width / 2)) / (self.width / 2)
-        angle = relative_x * 40.0 # Rozsah +- 40 stupňů
-        
-        # Přepočet Y souřadnice na vzdálenost (např. 2 až 15 metrů)
-        # Spodek okna = blízko, Vršek = daleko
-        distance = 15.0 - (self.mouse_y / self.height) * 12.0
-
+    def publish_target(self, angle, distance, detected):
         msg = Point()
-        msg.x = float(angle)
-        msg.y = float(distance)
-        msg.z = 1.0 if self.detected else 0.0
-        
-        self.pub.publish(msg)
+        msg.x, msg.y, msg.z = float(angle), float(distance), 1.0 if detected else 0.0
+        self.publisher_.publish(msg)
 
-        # Vykreslení "obrazu z kamery"
-        img = np.zeros((self.height, self.width, 3), np.uint8)
-        # Nakreslíme "člověka" (kolečko) na pozici myši
-        cv2.circle(img, (self.mouse_x, self.mouse_y), 10, (0, 0, 255), -1)
-        cv2.putText(img, f"Uhel: {angle:.1f} deg", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        cv2.putText(img, f"Vzdalenost: {distance:.1f} m", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        cv2.imshow("Kamera Simulator (Ovladani mysi)", img)
-        cv2.waitKey(1)
-
-def main():
-    rclpy.init()
-    node = MouseCameraNode()
-    try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
-    cv2.destroyAllWindows()
-    rclpy.shutdown()
+def main(args=None):
+    rclpy.init(args=args)
+    node = YoloRosNode()
+    try: rclpy.spin(node)
+    except KeyboardInterrupt: pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

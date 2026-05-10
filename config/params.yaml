@@ -1,7 +1,7 @@
 global_flight_node:
   ros__parameters:
     pid_yaw:
-      kp: 0.05
+      kp: 1.0
       ki: 0.001
       kd: 0.01
     pid_forward:
